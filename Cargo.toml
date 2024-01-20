@@ -1,0 +1,30 @@
+[package]
+name = "raxos"
+version = "0.1.0"
+edition = "2021"
+readme = "README.md"
+authors = [
+    "Zhang Yanpo <drdr.xp@gmail.com>",
+]
+categories = ["algorithms", "asynchronous", "data-structures"]
+description = "Half Raft Half Paxos"
+documentation = "https://docs.rs/raxos"
+homepage = "https://github.com/drmingdrmer/raxos"
+keywords = ["raft", "paxos", "consensus"]
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/drmingdrmer/raxos"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+anyhow = "1.0.76"
+derivative = "2.2.0"
+derive-new = "0.6.0"
+derive_more = "0.99.17"
+itertools = "0.12.0"
+log = "0.4.20"
+tokio = { version="1.8", default-features=false, features=["fs", "io-util", "macros", "rt", "rt-multi-thread", "sync", "time"] }
+
+[dev-dependencies]
+env_logger = "0.10.2"
+
