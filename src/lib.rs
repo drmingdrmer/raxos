@@ -60,30 +60,18 @@ use tokio::sync::watch;
 
 use crate::display::DisplayExt;
 
-#[derive(Debug, Clone, Default, Copy, PartialEq, Eq, Hash, Display)]
+#[derive(Debug, Clone, Default, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Display)]
 #[display(fmt = "L({})", _0)]
-pub struct LeaderId(pub u64);
-
-impl PartialOrd for LeaderId {
-    fn partial_cmp(&self, b: &Self) -> Option<Ordering> {
-        [None, Some(Ordering::Equal)][(self.0 == b.0) as usize]
-    }
-}
+pub struct ProposerId(pub u64);
 
 #[derive(Debug, Clone, Default, Copy, PartialEq, Eq, PartialOrd, Hash)]
 #[derive(New)]
-pub struct Vote {
+pub struct Time {
     pub term: u64,
-    pub committed: Option<()>,
-    pub voted_for: LeaderId,
+    pub proposer_id: ProposerId,
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Display)]
-#[display(fmt = "T{}-{}", term, index)]
-pub struct LogId {
-    term: u64,
-    index: u64,
-}
+pub type LogId = Time;
 
 #[derive(Debug, Clone, Default, New)]
 pub struct Log {
@@ -108,18 +96,19 @@ impl Net {
 
 #[derive(Debug)]
 pub struct Request {
-    vote: Vote,
-    last_log_id: LogId,
+    time: Time,
+    last_log_time: LogId,
 
     prev: LogId,
-    logs: Vec<Log>,
+    log: Option<Log>,
+
     commit: u64,
 }
 
 #[derive(Debug)]
 pub struct Reply {
     granted: bool,
-    vote: Vote,
+    vote: Time,
     log: Result<LogId, u64>,
 }
 
@@ -154,26 +143,29 @@ pub struct Leading {
 
 #[derive(Debug, Default, Clone, PartialEq, Eq, New)]
 pub struct Metrics {
-    pub vote: Vote,
+    pub vote: Time,
     pub last_log: LogId,
     pub commit: u64,
     pub config: Vec<BTreeSet<u64>>,
     pub progresses: Option<BTreeMap<u64, Progress>>,
 }
 
+/// Data that need to be persisted.
 #[derive(Debug, Default)]
 pub struct Store {
     id: u64,
-    vote: Vote,
+    vote: Time,
+
     configs: BTreeMap<u64, Vec<BTreeSet<u64>>>,
     replies: BTreeMap<u64, oneshot::Sender<String>>,
+
     logs: Vec<Log>,
 }
 
 impl Store {
     pub fn new(membership: Vec<BTreeSet<u64>>) -> Self {
         let mut configs = BTreeMap::new();
-        let vote = Vote::default();
+        let vote = Time::default();
         configs.insert(0, membership);
         let replies = BTreeMap::new();
         Store { id: 0, vote, configs, replies, logs: vec![Log::default()] }
@@ -231,7 +223,13 @@ impl Store {
 
 pub struct Raft {
     pub id: u64,
+
+    /// Local Time on every node.
+    pub times: BTreeMap<u64, Time>,
+    pub last_log_times: BTreeMap<u64, Time>,
+
     pub leading: Option<Leading>,
+
     pub commit: u64,
     pub net: Net,
     pub sto: Store,
@@ -278,7 +276,7 @@ impl Raft {
     }
 
     pub fn elect(&mut self) {
-        self.sto.vote = Vote::new(self.sto.vote.term + 1, None, LeaderId(self.id));
+        self.sto.vote = Time::new(self.sto.vote.term + 1, None, ProposerId(self.id));
 
         let noop_index = self.sto.last().index + 1;
         let config = self.sto.config().clone();
@@ -323,14 +321,14 @@ impl Raft {
 
     pub fn handle_replicate_req(&mut self, req: Request) -> Reply {
         let my_last = self.sto.last();
-        let (is_granted, vote) = self.check_vote(req.vote);
-        let is_upto_date = req.last_log_id >= my_last;
+        let (is_granted, vote) = self.check_vote(req.time);
+        let is_upto_date = req.last_log_time >= my_last;
 
-        let req_last = req.logs.last().map(|x| x.log_id).unwrap_or(req.prev);
+        let req_last = req.log.last().map(|x| x.log_id).unwrap_or(req.prev);
 
         if is_granted && is_upto_date {
             let log = if self.sto.get_log_id(req.prev.index) == Some(req.prev) {
-                self.sto.append(req.logs);
+                self.sto.append(req.log);
                 self.commit(min(req.commit, req_last.index));
                 Ok(req_last)
             } else {
@@ -348,7 +346,7 @@ impl Raft {
         let l = self.leading.as_mut()?;
         let v = self.sto.vote;
 
-        let is_same_leader = reply.vote.term == v.term && reply.vote.voted_for == v.voted_for;
+        let is_same_leader = reply.vote.term == v.term && reply.vote.proposer_id == v.proposer_id;
 
         // 0. Set a replication channel to `ready`, once a reply is received.
         if is_same_leader {
@@ -416,11 +414,11 @@ impl Raft {
         let prev = (p.acked.index + p.len) / 2;
 
         let req = Request {
-            vote: self.sto.vote,
-            last_log_id: self.sto.last(),
+            time: self.sto.vote,
+            last_log_time: self.sto.last(),
 
             prev: self.sto.get_log_id(prev).unwrap(),
-            logs: self.sto.read_logs(prev + 1, n),
+            log: self.sto.read_logs(prev + 1, n),
 
             commit: self.commit,
         };
@@ -440,14 +438,14 @@ impl Raft {
         }
     }
 
-    fn check_vote(&mut self, vote: Vote) -> (bool, Vote) {
+    fn check_vote(&mut self, vote: Time) -> (bool, Time) {
         trace!("N{} check_vote: my:{}, {}", self.id, self.sto.vote, vote);
 
         if vote > self.sto.vote {
             info!("N{} update_vote: {} --> {}", self.id, self.sto.vote, vote);
             self.sto.vote = vote;
 
-            if vote.voted_for != LeaderId(self.id) && self.leading.is_some() {
+            if vote.proposer_id != ProposerId(self.id) && self.leading.is_some() {
                 info!("N{} Leading quit: vote:{}", self.id, self.sto.vote);
                 self.leading = None;
             }
@@ -456,6 +454,17 @@ impl Raft {
         trace!("check_vote: ret: {}", self.sto.vote);
         (vote == self.sto.vote, self.sto.vote)
     }
+}
+
+pub fn max_committed(times: &BTreeMap<u64, Time>, config: &Vec<BTreeSet<u64>>) -> Option<Time> {
+    let desc = times.values().sorted().rev();
+
+    let mut max_committed = desc.filter(|acked| {
+        let greater_equal = times.iter().filter(|(_id, t)| t >= *acked);
+        is_quorum(config, greater_equal.map(|(id, _)| id))
+    });
+
+    max_committed.next().copied()
 }
 
 pub fn is_quorum<'a>(config: &[BTreeSet<u64>], granted: impl IntoIterator<Item = &'a u64>) -> bool {

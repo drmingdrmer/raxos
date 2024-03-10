@@ -9,7 +9,7 @@ use crate::Metrics;
 use crate::Progress;
 use crate::Reply;
 use crate::Request;
-use crate::Vote;
+use crate::Time;
 
 pub struct Display<'a, T> {
     v: &'a T,
@@ -71,14 +71,14 @@ where T: fmt::Display
     }
 }
 
-impl fmt::Display for Vote {
+impl fmt::Display for Time {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let c = if self.committed.is_some() {
             "COMMITTED"
         } else {
             "uncommitted"
         };
-        write!(f, "T{}-{c}-{}", self.term, self.voted_for)
+        write!(f, "T{}-{c}-{}", self.term, self.proposer_id)
     }
 }
 
@@ -130,9 +130,9 @@ impl fmt::Display for Metrics {
 
 impl fmt::Display for Request {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "(vote:{}, last:{}", self.vote, self.last_log_id,)?;
+        write!(f, "(vote:{}, last:{}", self.time, self.last_log_time,)?;
         write!(f, " commit:{}", self.commit)?;
-        write!(f, " logs:{}<{})", self.prev, self.logs.iter().join(","))
+        write!(f, " logs:{}<{})", self.prev, self.log.iter().join(","))
     }
 }
 

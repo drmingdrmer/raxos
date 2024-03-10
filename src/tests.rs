@@ -10,10 +10,10 @@ use tokio::sync::oneshot;
 use tokio::sync::watch;
 
 use crate::Event;
-use crate::LeaderId;
 use crate::Log;
 use crate::Metrics;
 use crate::Net;
+use crate::ProposerId;
 use crate::Raft;
 use crate::Store;
 
@@ -81,7 +81,7 @@ async fn test_raft() {
         loop {
             {
                 let mm = mtx.borrow();
-                if mm.vote.voted_for == LeaderId(id) && mm.vote.committed.is_some() {
+                if mm.vote.voted_for == ProposerId(id) && mm.vote.committed.is_some() {
                     info!("=== Leader established {}", mm.vote);
                     break;
                 }
